@@ -1,68 +1,57 @@
-name: Fil-CC ORC compilation-cost probe
+name: Fil-CC integrated runtime stress
 on:
   push:
     branches: [codex/fil-cc-stock-probe]
 permissions:
+  actions: read
   contents: read
 jobs:
-  jit-cost:
+  stress:
     runs-on: ubuntu-24.04
     steps:
-      - name: Time native-only ORC materialization
+      - uses: actions/checkout@v4
+        with:
+          ref: ca20f8d3fa46eb42dd172725d1a0904515c78a33
+          sparse-checkout: |
+            benchmarkData
+            filcc
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45926650575
+          name: filcc-clang-linux-x86_64
+          path: package
+      - name: Verify ABI, C++ support, PHIs, and concurrent collection
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-20-dev
-          cat >orc-probe.cpp <<'EOF'
-          #include "llvm/ExecutionEngine/Orc/LLJIT.h"
-          #include "llvm/IR/IRBuilder.h"
-          #include "llvm/Support/TargetSelect.h"
-          #include <algorithm>
-          #include <chrono>
+          (cd package && tar -xJf filcc-clang-linux-x86_64.tar.xz)
+          bash filcc/install.sh package/clang-20 "$RUNNER_TEMP/stock"
+          stock="$RUNNER_TEMP/stock/build/bin/clang"
+          filcc="$RUNNER_TEMP/stock/build/bin/filcc-clang"
+          "$filcc" --version
+          filcc/tests/run.sh "$stock" -march=native
+          filcc/tests/run.sh "$filcc" -march=native -mllvm -filcc-batch-reads
+          "$filcc" -O3 -march=native -I filcc -mllvm -filcc-batch-reads -mllvm -filc-light-verbose \
+            -S -emit-llvm filcc/tests/regress.c -o "$RUNNER_TEMP/regress.ll" 2>"$RUNNER_TEMP/regress.log"
+          grep 'filcc.batch' "$RUNNER_TEMP/regress.log" >/dev/null
+          grep 'load <4 x i16>' "$RUNNER_TEMP/regress.log"
+          grep 'load <4 x i64>' "$RUNNER_TEMP/regress.log"
+          cat >"$RUNNER_TEMP/smoke.cpp" <<'EOF'
+          #include <array>
           #include <cstdint>
-          #include <cstdio>
-          #include <vector>
-
-          using namespace llvm;
-          using Clock = std::chrono::steady_clock;
-
+          #include <span>
+          __attribute__((noinline))
+          std::uint64_t total(const std::uint32_t *data, std::size_t size) {
+              std::uint64_t n = 0;
+              for (std::size_t i = 0; i != size; ++i)
+                  n += data[i];
+              return n;
+          }
           int main() {
-            InitializeNativeTarget();
-            InitializeNativeTargetAsmPrinter();
-            ExitOnError unwrap;
-            const auto init = Clock::now();
-            auto jit = unwrap(orc::LLJITBuilder().create());
-            const auto startup = std::chrono::duration_cast<std::chrono::nanoseconds>(
-              Clock::now() - init).count();
-            std::vector<long long> results;
-            for (int iteration = 0; iteration != 34; ++iteration) {
-              auto context = std::make_unique<LLVMContext>();
-              auto module = std::make_unique<Module>("callback", *context);
-              module->setDataLayout(jit->getDataLayout());
-              IRBuilder<> b(*context);
-              auto *type = FunctionType::get(b.getInt32Ty(), {b.getInt32Ty()}, false);
-              std::string name = "clamp_" + std::to_string(iteration);
-              auto *function = Function::Create(type, GlobalValue::ExternalLinkage, name, *module);
-              b.SetInsertPoint(BasicBlock::Create(*context, "entry", function));
-              b.CreateRet(b.CreateAnd(function->getArg(0), b.getInt32(255)));
-              const auto start = Clock::now();
-              unwrap(jit->addIRModule(orc::ThreadSafeModule(std::move(module), std::move(context))));
-              auto code = unwrap(jit->lookup(name));
-              const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                Clock::now() - start).count();
-              if (code.toPtr<std::uint32_t (*)(std::uint32_t)>()(123456) != (123456 & 255))
-                return 1;
-              if (iteration >= 3)
-                results.push_back(elapsed);
-            }
-            std::sort(results.begin(), results.end());
-            std::printf("startup_ns %lld\n", static_cast<long long>(startup));
-            std::printf("materialization_ns min=%lld median=%lld p90=%lld max=%lld\n",
-              results.front(), results[15], results[27], results.back());
-            for (long long sample : results) std::printf("sample_ns %lld\n", sample);
+              auto values = std::array<std::uint32_t, 9>{1,2,3,4,5,6,7,8,9};
+              auto view = std::span(values);
+              return total(view.data(), view.size()) == 45 ? 0 : 1;
           }
           EOF
-          clang++ $(llvm-config-20 --cxxflags) -O2 orc-probe.cpp \
-            $(llvm-config-20 --ldflags --link-shared --libs orcjit native --system-libs) -o orc-probe
-          lscpu | sed -n -e '/Model name:/p'
-          allowed=$(sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' /proc/self/status)
-          taskset -c "${allowed%%[-,]*}" ./orc-probe
+          "$filcc" --driver-mode=g++ -std=c++20 -O3 -mllvm -filcc-batch-reads \
+            "$RUNNER_TEMP/smoke.cpp" -o "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke"
