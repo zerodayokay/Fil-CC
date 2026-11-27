@@ -14,7 +14,7 @@ Fil-CC builds on Fil-C 0.687 at commit `2db72c646daa1acad2754bcb0e2f220f732e9789
 | Build and ABI | Clang 20.1.8 and Fil-C runtime | Same driver and runtime ABI. This fork's installer and CI target Linux x86-64 |
 | Runtime specialization | Ahead-of-time compilation | Ahead-of-time compilation, with JIT feasibility evaluated below |
 
-The runtime may revoke an allocation even while a pointer to it is available as a GC root. A capability range established before a safepoint therefore cannot serve as blanket permission for later iterations. Fil-CC's entry test selects the loop shape from the count. Each batch establishes the current capability and range facts when the vector load executes. [Fil-C capability model](https://fil-c.org/invisicaps) Â· [Fil-C safepoints](https://fil-c.org/safepoints)
+The runtime may revoke an allocation even while a pointer to it is available as a GC root. A capability range established before a safepoint therefore cannot serve as blanket permission for later iterations. Fil-CC's entry test selects the loop shape from the count. Each batch establishes the current capability and range facts when the vector load executes. [Fil-C capability model](https://fil-c.org/invisicaps) · [Fil-C safepoints](https://fil-c.org/safepoints)
 
 ## Transformation
 
