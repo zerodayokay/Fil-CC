@@ -1,108 +1,68 @@
-name: Fil-CC stock preflight
+name: Fil-CC ORC compilation-cost probe
 on:
   push:
     branches: [codex/fil-cc-stock-probe]
 permissions:
   contents: read
 jobs:
-  stock:
+  jit-cost:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 6ecd52bf6570a7a8ecad48b9a04df0db3581a9f9
-          sparse-checkout: |
-            benchmarkData
-            filcc
-            llvm/lib/Transforms/Instrumentation
-      - name: Verify the exact pass with a standalone LLVM IR round trip
+      - name: Time native-only ORC materialization
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq llvm-20-dev
-          bash filcc/install.sh "$(command -v clang)" "$RUNNER_TEMP/stock"
-          stock="$RUNNER_TEMP/stock/build/bin/clang"
-          dir=llvm/lib/Transforms/Instrumentation
-          mkdir preflight
-          cat >preflight/rewrite.cpp <<'EOF'
-          #include "FilCCBatchReads.h"
-          #include "llvm/IR/Module.h"
-          #include "llvm/IR/Verifier.h"
-          #include "llvm/IRReader/IRReader.h"
-          #include "llvm/Support/SourceMgr.h"
-          #include "llvm/Support/raw_ostream.h"
+          cat >orc-probe.cpp <<'EOF'
+          #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+          #include "llvm/IR/IRBuilder.h"
+          #include "llvm/Support/TargetSelect.h"
+          #include <algorithm>
+          #include <chrono>
+          #include <cstdint>
+          #include <cstdio>
+          #include <vector>
+
           using namespace llvm;
-          int main(int argc, char **argv) {
-            if (argc != 2) return 2;
-            SMDiagnostic error;
-            LLVMContext context;
-            auto module = parseIRFile(argv[1], error, context);
-            if (!module) { error.print(argv[0], errs()); return 1; }
-            if (verifyModule(*module, &errs())) return 1;
-            for (Function &function : *module) filccBatchReads(function);
-            if (verifyModule(*module, &errs())) return 1;
-            module->print(outs(), nullptr);
+          using Clock = std::chrono::steady_clock;
+
+          int main() {
+            InitializeNativeTarget();
+            InitializeNativeTargetAsmPrinter();
+            ExitOnError unwrap;
+            const auto init = Clock::now();
+            auto jit = unwrap(orc::LLJITBuilder().create());
+            const auto startup = std::chrono::duration_cast<std::chrono::nanoseconds>(
+              Clock::now() - init).count();
+            std::vector<long long> results;
+            for (int iteration = 0; iteration != 34; ++iteration) {
+              auto context = std::make_unique<LLVMContext>();
+              auto module = std::make_unique<Module>("callback", *context);
+              module->setDataLayout(jit->getDataLayout());
+              IRBuilder<> b(*context);
+              auto *type = FunctionType::get(b.getInt32Ty(), {b.getInt32Ty()}, false);
+              std::string name = "clamp_" + std::to_string(iteration);
+              auto *function = Function::Create(type, GlobalValue::ExternalLinkage, name, *module);
+              b.SetInsertPoint(BasicBlock::Create(*context, "entry", function));
+              b.CreateRet(b.CreateAnd(function->getArg(0), b.getInt32(255)));
+              const auto start = Clock::now();
+              unwrap(jit->addIRModule(orc::ThreadSafeModule(std::move(module), std::move(context))));
+              auto code = unwrap(jit->lookup(name));
+              const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                Clock::now() - start).count();
+              if (code.toPtr<std::uint32_t (*)(std::uint32_t)>()(123456) != (123456 & 255))
+                return 1;
+              if (iteration >= 3)
+                results.push_back(elapsed);
+            }
+            std::sort(results.begin(), results.end());
+            std::printf("startup_ns %lld\n", static_cast<long long>(startup));
+            std::printf("materialization_ns min=%lld median=%lld p90=%lld max=%lld\n",
+              results.front(), results[15], results[27], results.back());
+            for (long long sample : results) std::printf("sample_ns %lld\n", sample);
           }
           EOF
-          clang++ $(llvm-config-20 --cxxflags) -I"$dir" preflight/rewrite.cpp "$dir/FilCCBatchReads.cpp" \
-            $(llvm-config-20 --ldflags --link-shared --libs core irreader transformutils --system-libs) -o preflight/rewrite
-          for name in kernels regress; do
-            if [[ "$name" == regress ]]; then source=filcc/tests/regress.c; else source=filcc/kernels.c; fi
-            "$stock" -O3 -march=native -I filcc -mllvm -filc-light-verbose -S -emit-llvm "$source" \
-              -o "preflight/original-$name.ll" 2>"preflight/trace-$name.log"
-            awk 'NR == 1 {next} /^Here.s the pizlonated module/ {exit} !/^target datalayout_after_filc / {sub(/-ni:0-/, "-"); print}' \
-              "preflight/trace-$name.log" >"preflight/input-$name.ll"
-            preflight/rewrite "preflight/input-$name.ll" >"preflight/rewritten-$name.ll"
-            grep -E 'load <4 x i(8|16|32|64)>' "preflight/rewritten-$name.ll"
-            layout=$(grep -m 1 '^target datalayout_after_filc ' "preflight/trace-$name.log")
-            sed -e "1a $layout" -e '/^target datalayout = /s/e-m:e-/e-m:e-ni:0-/' "preflight/rewritten-$name.ll" >"preflight/filc-$name.ll"
-            "$stock" -O3 -march=native -c "preflight/filc-$name.ll" -o "preflight/$name.o"
-          done
-          "$stock" -O3 preflight/kernels.o filcc/check.c -o preflight/check
-          preflight/check
-          for kind in null short freed; do
-            if preflight/check "$kind" >"preflight/check-$kind.log" 2>&1; then exit 1; fi
-            grep -i 'safety error' "preflight/check-$kind.log"
-          done
-          "$stock" -O3 -pthread preflight/kernels.o preflight/regress.o -o preflight/regress
-          timeout 60s preflight/regress
-      - name: Benchmark the same pass via IR replay
-        run: |
-          stock="$RUNNER_TEMP/stock/build/bin/clang"
-          awk 'NR == 1 {next} /^Here.s the pizlonated module/ {exit} {print}' \
-            preflight/trace-kernels.log >preflight/replay-kernels.ll
-          cat >preflight/filcc-replay <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          root=$(cd "$(dirname "$0")" && pwd)
-          replay="$root/replay-kernels.ll"
-          args=()
-          for arg in "$@"; do
-            if [[ "$arg" == -filcc-batch-reads ]]; then
-              unset 'args[-1]'
-              replay="$root/filc-kernels.ll"
-            else
-              args+=("$arg")
-            fi
-          done
-          for i in "${!args[@]}"; do
-            if [[ "${args[i]}" == */kernels.c ]]; then args[i]="$replay"; fi
-          done
-          exec "$STOCK_FILC" "${args[@]}"
-          EOF
-          chmod +x preflight/filcc-replay
-          export STOCK_FILC="$stock"
-          sed -i 's/filcc.batch.guard/filcc.batch:/g' filcc/bench.py
-          python3 filcc/bench.py --stock "$stock" --filcc "$PWD/preflight/filcc-replay" --out replay-results
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: replay-benchmark-results
-          path: |
-            replay-results/*.json
-            replay-results/*.ll
-            replay-results/*.log
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: standalone-rewrite-preflight
-          path: preflight/*.ll
+          clang++ $(llvm-config-20 --cxxflags) -O2 orc-probe.cpp \
+            $(llvm-config-20 --ldflags --link-shared --libs orcjit native --system-libs) -o orc-probe
+          lscpu | sed -n -e '/Model name:/p'
+          allowed=$(sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' /proc/self/status)
+          taskset -c "${allowed%%[-,]*}" ./orc-probe
