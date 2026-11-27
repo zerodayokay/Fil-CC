@@ -1,3 +1,37 @@
+# Fil-CC
+
+Fil-CC is a fork of Fil-C 0.687 for experimenting with faster checked C and C++ code. Its first optimization batches four adjacent scalar integer reads into a single checked vector read. Enable it per compilation with `-mllvm -filcc-batch-reads`. The compiler and generated programs use the Fil-C ABI and runtime.
+
+## Build and use on Linux x86-64
+
+On Ubuntu 24.04 or an Ubuntu 24.04 WSL 2 distribution, install the build prerequisites and run the build script from the checkout. Use the Linux filesystem for the source checkout and build on WSL.
+
+```sh
+sudo apt-get install build-essential clang lld cmake ninja-build patchelf curl xz-utils python3
+./filcc/build.sh
+```
+
+The script installs the pinned Fil-C runtime and both compiler drivers under `build-filcc/runtime`. Compile with optional batching like this.
+
+```sh
+build-filcc/runtime/build/bin/filcc-clang -O3 -mllvm -filcc-batch-reads hello.c -o hello
+./hello
+```
+
+For C++, pass `--driver-mode=g++`. Remove the batching flag to compare against the same build without the experiment. To install a prebuilt `clang-20` from the Linux CI artifact, extract its archive and run `./filcc/install.sh ./clang-20 ./filcc-runtime`. The runtime distribution should remain at its installation path because upstream's setup records absolute paths.
+
+## Compare compilers
+
+```sh
+python3 filcc/bench.py \
+  --stock build-filcc/runtime/build/bin/clang \
+  --filcc build-filcc/runtime/build/bin/filcc-clang
+```
+
+The benchmark verifies equivalent valid outputs and Fil-C diagnostics, then reports native Clang, stock Fil-C, and Fil-CC with batching off and on. See the [design, safety boundaries, and JIT evaluation](filcc/DESIGN.md) and the [Linux build and benchmark artifacts](https://github.com/zerodayokay/Fil-CC/actions/workflows/filcc-linux.yml).
+
+---
+
 # Fil-C 0.687
 
 Fil-C is a fanatically compatible memory-safe implementation of C and C++. Lots
