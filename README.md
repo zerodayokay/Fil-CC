@@ -8,6 +8,9 @@ On Ubuntu 24.04 or an Ubuntu 24.04 WSL 2 distribution, install the build prerequ
 
 ```sh
 sudo apt-get install build-essential clang lld cmake ninja-build patchelf curl xz-utils python3
+git clone --depth 1 --filter=blob:none --sparse --branch codex/fil-cc https://github.com/zerodayokay/Fil-CC.git
+cd Fil-CC
+git sparse-checkout set benchmarkData clang cmake filcc llvm third-party
 ./filcc/build.sh
 ```
 
@@ -28,7 +31,15 @@ python3 filcc/bench.py \
   --filcc build-filcc/runtime/build/bin/filcc-clang
 ```
 
-The benchmark verifies equivalent valid outputs and Fil-C diagnostics, then reports native Clang, stock Fil-C, and Fil-CC with batching off and on. See the [design, safety boundaries, and JIT evaluation](filcc/DESIGN.md) and the [Linux build and benchmark artifacts](https://github.com/zerodayokay/Fil-CC/actions/workflows/filcc-linux.yml).
+The benchmark verifies equivalent valid outputs and Fil-C diagnostics, then reports native Clang, stock Fil-C, and Fil-CC with batching off and on.
+
+Run the extended recurrence and concurrent-GC checks separately.
+
+```sh
+filcc/tests/run.sh build-filcc/runtime/build/bin/filcc-clang -mllvm -filcc-batch-reads
+```
+
+See the [design, safety boundaries, and JIT evaluation](filcc/DESIGN.md) and the [Linux build and benchmark artifacts](https://github.com/zerodayokay/Fil-CC/actions/workflows/filcc-linux.yml).
 
 ---
 
