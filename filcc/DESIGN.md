@@ -14,7 +14,7 @@ Fil-CC builds on Fil-C 0.687 at commit `2db72c646daa1acad2754bcb0e2f220f732e9789
 | Build and ABI | Clang 20.1.8 and Fil-C runtime | Same driver and runtime ABI. This fork's installer and CI target Linux x86-64 |
 | Runtime specialization | Ahead-of-time compilation | Ahead-of-time compilation, with JIT feasibility evaluated below |
 
-The runtime may revoke an allocation even while a pointer to it is available as a GC root. A capability range established before a safepoint therefore cannot serve as blanket permission for later iterations. Fil-CC's entry test selects the loop shape from the count. Each batch establishes the current capability and range facts when the vector load executes. [Fil-C capability model](https://fil-c.org/invisicaps) · [Fil-C safepoints](https://fil-c.org/safepoints)
+The runtime may revoke an allocation even while a pointer to it is available as a GC root. A capability range established before a safepoint therefore cannot serve as blanket permission for later iterations. Fil-CC's entry test selects the loop shape from the count. Each batch establishes the current capability and range facts when the vector load executes. [Fil-C capability model](https://fil-c.org/invisicaps) Â· [Fil-C safepoints](https://fil-c.org/safepoints)
 
 ## Transformation
 
@@ -36,7 +36,7 @@ For `n = 1,048,577`, `b = 262,144` and `t = 1`. The logical count falls from 1,0
 
 The callback workloads run an integer transform through a generic function pointer or through an explicit AOT branch on the known application selector. Both forms use identical callback bodies and input data. The 100% and 90% dominant-target cases estimate what callers with known targets can gain. They are also controls because Fil-CC's batch pass leaves the indirect call in the generic loop.
 
-A general implementation should evaluate instrumented AOT indirect-call promotion and LTO after that experiment. A runtime optimizer is justified only by residual gains over AOT on held-out workloads with changing callback targets. The candidate must guard the callable capability and address using the existing validation rules, preserve the hidden Fil-C ABI and safepoint root maps, and keep the generic checked path reachable on a miss. The dynamic compiler would need trusted Fil-C input, executable-memory lifecycle management, module and code lifetime tracking, and tests for signals and concurrent GC.
+A general implementation should evaluate sampled AOT profile-guided indirect-call promotion and LTO after that experiment. The pinned distribution builds compiler-rt with its profile runtime disabled, so instrumentation-based PGO needs a compatible profile runtime or a different profiling path. [Fil-C 0.687 compiler-rt build](https://github.com/pizlonator/fil-c/blob/v0.687/build_compiler_rt.sh) A runtime optimizer is justified only by residual gains over AOT on held-out workloads with changing callback targets. The candidate must guard the callable capability and address using the existing validation rules, preserve the hidden Fil-C ABI and safepoint root maps, and keep the generic checked path reachable on a miss. The dynamic compiler would need trusted Fil-C input, executable-memory lifecycle management, module and code lifetime tracking, and tests for signals and concurrent GC.
 
 Break-even elements are `compile_ns / (AOT_ns_per_element - JIT_ns_per_element)` when the denominator is positive. For example, 2 ms of dynamic compilation and 0.2 ns per element of additional savings over AOT need 10 million elements to repay compilation. A callback's frequency can guide the decision to specialize. It cannot establish authority to use the callee or extend the lifetime of an array capability.
 
@@ -49,6 +49,7 @@ The benchmark records all samples, CPU model, flags, toolchain versions, input h
 - Pointer chasing follows a shuffled ring of separately allocated nodes.
 - The image workload reads a real 5,000 by 3,417 P6 chart from the inherited benchmark data. It times opening the file, parsing the dimensions, allocating and reading the raster, summing the 51,255,000 raster bytes, and freeing the buffer.
 - The safety tests exercise zero-count null input, batch and tail boundaries, interior pointers, and invalid accesses with null, short, and freed ranges.
+- The extended regression test compares an order-dependent 16-bit recurrence and 64-bit sums with scalar references. It also runs scans concurrently with the collector and requires GC cycles to complete during scanning.
 - The lowering check confirms the batch is present in eligible code before post-lowering optimization. For hardware cycles and instructions, pass `--perf`. Those counters cover the complete process, including setup and teardown. Container or WSL kernel policy may restrict access to counters.
 
 Hosted Linux results characterize one machine and these workloads. PizBench, AArch64, broader C and C++ corpora, and worst-case GC response require separate measurements.
