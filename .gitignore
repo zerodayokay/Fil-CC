@@ -86,3 +86,7 @@ pythonenv*
 *.projeny.status
 pizlonated-*.tar.gz
 
+# Fil-CC builds and benchmark artifacts
+/build-filcc/
+/filcc-results/
+/filcc-runtime/
