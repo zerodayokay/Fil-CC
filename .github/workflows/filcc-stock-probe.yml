@@ -11,9 +11,62 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: 6ecd52bf6570a7a8ecad48b9a04df0db3581a9f9
-          sparse-checkout: filcc
-      - name: Verify the native and stock runtime oracles
+          sparse-checkout: |
+            benchmarkData
+            filcc
+            llvm/lib/Transforms/Instrumentation
+      - name: Verify the exact pass with a standalone LLVM IR round trip
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-20-dev
           bash filcc/install.sh "$(command -v clang)" "$RUNNER_TEMP/stock"
-          filcc/tests/run.sh clang
-          filcc/tests/run.sh "$RUNNER_TEMP/stock/build/bin/clang"
+          stock="$RUNNER_TEMP/stock/build/bin/clang"
+          dir=llvm/lib/Transforms/Instrumentation
+          mkdir preflight
+          cat >preflight/rewrite.cpp <<'EOF'
+          #include "FilCCBatchReads.h"
+          #include "llvm/IR/Module.h"
+          #include "llvm/IR/Verifier.h"
+          #include "llvm/IRReader/IRReader.h"
+          #include "llvm/Support/SourceMgr.h"
+          #include "llvm/Support/raw_ostream.h"
+          using namespace llvm;
+          int main(int argc, char **argv) {
+            if (argc != 2) return 2;
+            SMDiagnostic error;
+            LLVMContext context;
+            auto module = parseIRFile(argv[1], error, context);
+            if (!module) { error.print(argv[0], errs()); return 1; }
+            if (verifyModule(*module, &errs())) return 1;
+            for (Function &function : *module) filccBatchReads(function);
+            if (verifyModule(*module, &errs())) return 1;
+            module->print(outs(), nullptr);
+          }
+          EOF
+          clang++ $(llvm-config-20 --cxxflags) -I"$dir" preflight/rewrite.cpp "$dir/FilCCBatchReads.cpp" \
+            $(llvm-config-20 --ldflags --link-shared --libs core irreader transformutils --system-libs) -o preflight/rewrite
+          for name in kernels regress; do
+            if [[ "$name" == regress ]]; then source=filcc/tests/regress.c; else source=filcc/kernels.c; fi
+            "$stock" -O3 -march=native -I filcc -mllvm -filc-light-verbose -S -emit-llvm "$source" \
+              -o "preflight/original-$name.ll" 2>"preflight/trace-$name.log"
+            awk 'NR == 1 {next} /^Here.s the pizlonated module/ {exit} !/^target datalayout_after_filc / {print}' \
+              "preflight/trace-$name.log" >"preflight/input-$name.ll"
+            preflight/rewrite "preflight/input-$name.ll" >"preflight/rewritten-$name.ll"
+            grep -E 'load <4 x i(8|16|32|64)>' "preflight/rewritten-$name.ll"
+            layout=$(grep -m 1 '^target datalayout_after_filc ' "preflight/trace-$name.log")
+            sed "1a $layout" "preflight/rewritten-$name.ll" >"preflight/filc-$name.ll"
+            "$stock" -O3 -march=native -c "preflight/filc-$name.ll" -o "preflight/$name.o"
+          done
+          "$stock" -O3 preflight/kernels.o filcc/check.c -o preflight/check
+          preflight/check
+          for kind in null short freed; do
+            if preflight/check "$kind" >"preflight/check-$kind.log" 2>&1; then exit 1; fi
+            grep -i 'safety error' "preflight/check-$kind.log"
+          done
+          "$stock" -O3 -pthread preflight/kernels.o preflight/regress.o -o preflight/regress
+          timeout 60s preflight/regress
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: standalone-rewrite-preflight
+          path: preflight/*.ll
