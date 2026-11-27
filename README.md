@@ -7,6 +7,7 @@ Fil-CC is a fork of Fil-C 0.687 for experimenting with faster checked C and C++ 
 On Ubuntu 24.04 or an Ubuntu 24.04 WSL 2 distribution, install the build prerequisites and run the build script from the checkout. Use the Linux filesystem for the source checkout and build on WSL.
 
 ```sh
+sudo apt-get update
 sudo apt-get install build-essential clang lld cmake ninja-build patchelf curl xz-utils python3
 git clone --depth 1 --filter=blob:none --sparse --branch codex/fil-cc https://github.com/zerodayokay/Fil-CC.git
 cd Fil-CC
@@ -39,7 +40,7 @@ Run the extended recurrence and concurrent-GC checks separately.
 filcc/tests/run.sh build-filcc/runtime/build/bin/filcc-clang -mllvm -filcc-batch-reads
 ```
 
-See the [design, safety boundaries, and JIT evaluation](filcc/DESIGN.md) and the [Linux build and benchmark artifacts](https://github.com/zerodayokay/Fil-CC/actions/workflows/filcc-linux.yml).
+See the [design, safety boundaries, and JIT evaluation](filcc/DESIGN.md), the [benchmark results](filcc/RESULTS.md), and the [Linux build and benchmark artifacts](https://github.com/zerodayokay/Fil-CC/actions/workflows/filcc-linux.yml).
 
 ---
 
