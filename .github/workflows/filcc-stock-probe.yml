@@ -49,12 +49,12 @@ jobs:
             if [[ "$name" == regress ]]; then source=filcc/tests/regress.c; else source=filcc/kernels.c; fi
             "$stock" -O3 -march=native -I filcc -mllvm -filc-light-verbose -S -emit-llvm "$source" \
               -o "preflight/original-$name.ll" 2>"preflight/trace-$name.log"
-            awk 'NR == 1 {next} /^Here.s the pizlonated module/ {exit} !/^target datalayout_after_filc / {print}' \
+            awk 'NR == 1 {next} /^Here.s the pizlonated module/ {exit} !/^target datalayout_after_filc / {sub(/-ni:0-/, "-"); print}' \
               "preflight/trace-$name.log" >"preflight/input-$name.ll"
             preflight/rewrite "preflight/input-$name.ll" >"preflight/rewritten-$name.ll"
             grep -E 'load <4 x i(8|16|32|64)>' "preflight/rewritten-$name.ll"
             layout=$(grep -m 1 '^target datalayout_after_filc ' "preflight/trace-$name.log")
-            sed "1a $layout" "preflight/rewritten-$name.ll" >"preflight/filc-$name.ll"
+            sed -e "1a $layout" -e '/^target datalayout = /s/e-m:e-/e-m:e-ni:0-/' "preflight/rewritten-$name.ll" >"preflight/filc-$name.ll"
             "$stock" -O3 -march=native -c "preflight/filc-$name.ll" -o "preflight/$name.o"
           done
           "$stock" -O3 preflight/kernels.o filcc/check.c -o preflight/check
