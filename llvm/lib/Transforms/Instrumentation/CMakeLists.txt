@@ -5,6 +5,7 @@ add_llvm_component_library(LLVMInstrumentation
   ControlHeightReduction.cpp
   DataFlowSanitizer.cpp
   DeleteRedundantPollchecks.cpp
+  FilCCBatchReads.cpp
   FilPizlonator.cpp
   GCOVProfiling.cpp
   BlockCoverageInference.cpp

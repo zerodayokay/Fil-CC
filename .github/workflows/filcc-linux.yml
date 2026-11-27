@@ -1,0 +1,42 @@
+name: Fil-CC Linux
+on:
+  push:
+    branches: [codex/fil-cc]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clang:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            clang
+            cmake
+            filcc
+            llvm
+            third-party
+      - name: Configure Fil-CC
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG" \
+            -DLLVM_ENABLE_PROJECTS=clang -DLLVM_TARGETS_TO_BUILD=X86 \
+            -DLLVM_ENABLE_LLD=ON -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_ENABLE_ZSTD=OFF
+      - name: Build modified optimizer first
+        run: ninja -C build -j "$(nproc)" lib/Transforms/Instrumentation/CMakeFiles/LLVMInstrumentation.dir/FilCCBatchReads.cpp.o
+      - name: Build clang
+        run: ninja -C build -j "$(nproc)" clang
+      - name: Package build
+        run: tar -C build/bin -cJf filcc-clang-linux-x86_64.tar.xz clang-20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: filcc-clang-linux-x86_64
+          path: filcc-clang-linux-x86_64.tar.xz
+          if-no-files-found: error

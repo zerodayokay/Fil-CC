@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Instrumentation/FilPizlonator.h"
+#include "FilCCBatchReads.h"
 
 #include <llvm/Analysis/CFG.h>
 #include <llvm/Demangle/Demangle.h>
@@ -59,6 +60,10 @@ static cl::opt<bool> optimizeChecks(
 static cl::opt<bool> propagateChecksBackward(
   "filc-propagate-checks-backward", cl::desc("Perform backward propagation of checks"),
   cl::Hidden, cl::init(true));
+static cl::opt<bool> filccBatchReadLoops(
+  "filcc-batch-reads",
+  cl::desc("Batch four scalar reads in eligible counted loops"),
+  cl::init(false));
 static cl::opt<bool> yoloAssembler(
   "yolo-assembler",
   cl::desc("Recognize the zunsafe_call, zunsafe_fast_call, and zunsafe_buf_call intrinsics"),
@@ -16220,6 +16225,9 @@ public:
     makeEHDatas();
     compileModuleAsm();
     lazifyAllocas();
+    if (filccBatchReadLoops)
+      for (Function &F : M.functions())
+        filccBatchReads(F);
     canonicalizeGEPs();
     dropUB();
     
