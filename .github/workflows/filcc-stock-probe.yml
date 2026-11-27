@@ -1,0 +1,44 @@
+name: Fil-CC stock preflight
+on:
+  push:
+    branches: [codex/fil-cc-stock-probe]
+permissions:
+  contents: read
+jobs:
+  stock:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            benchmarkData
+            filcc
+      - name: Check the unmodified toolchains and capture pass input
+        run: |
+          bash filcc/install.sh "$(command -v clang)" "$RUNNER_TEMP/stock"
+          stock="$RUNNER_TEMP/stock/build/bin/clang"
+          mkdir preflight
+          for compiler in clang "$stock"; do
+            label=$(basename "$(dirname "$compiler")")
+            "$compiler" -Wall -Wextra -O3 -march=native filcc/kernels.c filcc/check.c -o "preflight/check-$label"
+            "preflight/check-$label"
+            "$compiler" -Wall -Wextra -O3 -march=native filcc/kernels.c filcc/bench.c -o "preflight/bench-$label"
+            "preflight/bench-$label" scan 1048577 32
+            "preflight/bench-$label" ppm benchmarkData/Pizigani_1367_Chart_10MB.pnm 3
+          done
+          "$stock" -O3 -march=native -mllvm -filc-light-verbose -S -emit-llvm filcc/kernels.c -o preflight/stock.ll 2>preflight/lowering.log
+          for kind in null short freed; do
+            set +e
+            preflight/check-bin "$kind" >"preflight/check-$kind.log" 2>&1
+            status=$?
+            set -e
+            test "$status" -ne 0
+            grep -i 'safety error' "preflight/check-$kind.log"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preflight
+          path: |
+            preflight/*.log
+            preflight/*.ll
