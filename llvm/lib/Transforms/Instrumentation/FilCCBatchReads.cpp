@@ -41,19 +41,30 @@ bool isLaneInstruction(const Instruction &I) {
 }
 
 void batchLoop(BasicBlock &Loop) {
-  auto *Latch = dyn_cast<BranchInst>(Loop.getTerminator());
-  if (!Latch || !Latch->isConditional())
+  auto *Branch = dyn_cast<BranchInst>(Loop.getTerminator());
+  if (!Branch || !Branch->isConditional())
     return;
-  auto *Test = dyn_cast<ICmpInst>(Latch->getCondition());
+  auto *Test = dyn_cast<ICmpInst>(Branch->getCondition());
   if (!Test || Test->getParent() != &Loop || !Test->hasOneUse() ||
-      !Test->isEquality() ||
-      Latch->getSuccessor(Test->getPredicate() == ICmpInst::ICMP_EQ) != &Loop ||
-      Latch->getSuccessor(Test->getPredicate() != ICmpInst::ICMP_EQ) == &Loop)
+      (!Test->isEquality() && Test->getPredicate() != ICmpInst::ICMP_ULT))
     return;
+  bool ContinueOnFalse = Test->getPredicate() == ICmpInst::ICMP_EQ;
+  BasicBlock *Body = Branch->getSuccessor(ContinueOnFalse);
+  BasicBlock *Exit = Branch->getSuccessor(!ContinueOnFalse);
+  if (Exit == &Loop || Exit == Body)
+    return;
+  Instruction *Latch = Body->getTerminator();
+  if (Body != &Loop) {
+    auto *Back = dyn_cast<BranchInst>(Latch);
+    if (Body->getSinglePredecessor() != &Loop || !Back ||
+        !Back->isUnconditional() || Back->getSuccessor(0) != &Loop ||
+        Loop.getFirstNonPHI() != Test || Test->getNextNode() != Branch)
+      return;
+  }
 
   BasicBlock *Entry = nullptr;
   for (BasicBlock *Pred : predecessors(&Loop)) {
-    if (Pred == &Loop)
+    if (Pred == Body)
       continue;
     if (Entry)
       return;
@@ -64,7 +75,7 @@ void batchLoop(BasicBlock &Loop) {
 
   LoadInst *Read = nullptr;
   GetElementPtrInst *Address = nullptr;
-  for (Instruction &I : Loop) {
+  for (Instruction &I : *Body) {
     if (auto *LI = dyn_cast<LoadInst>(&I)) {
       if (Read || !LI->isSimple())
         return;
@@ -73,8 +84,8 @@ void batchLoop(BasicBlock &Loop) {
       if (Address)
         return;
       Address = GEP;
-    } else if (!isa<PHINode>(I) && &I != Test && &I != Latch &&
-               !isLaneInstruction(I)) {
+    } else if (!(Body == &Loop && isa<PHINode>(I)) && &I != Test &&
+               &I != Latch && !isLaneInstruction(I)) {
       return;
     }
   }
@@ -95,12 +106,14 @@ void batchLoop(BasicBlock &Loop) {
       !Index->getType()->isIntegerTy(64) ||
       !match(Index->getIncomingValueForBlock(Entry), m_Zero()))
     return;
-  Value *Next = Index->getIncomingValueForBlock(&Loop);
+  Value *Next = Index->getIncomingValueForBlock(Body);
   if (!match(Next, m_c_Add(m_Specific(Index), m_One())))
     return;
-  if (Test->getOperand(0) != Next && Test->getOperand(1) != Next)
+  Value *Progress = Body == &Loop ? Next : Index;
+  if (Test->getOperand(0) != Progress &&
+      (!Test->isEquality() || Test->getOperand(1) != Progress))
     return;
-  Value *Count = Test->getOperand(Test->getOperand(0) == Next ? 1 : 0);
+  Value *Count = Test->getOperand(Test->getOperand(0) == Progress ? 1 : 0);
   if (!isa<Argument, ConstantInt>(Count))
     return;
 
@@ -116,8 +129,8 @@ void batchLoop(BasicBlock &Loop) {
   Value *Enough = B.CreateICmpUGT(StableCount, B.getInt64(BatchWidth));
   // Every index in the batch is representable as a positive signed byte
   // offset. The checked vector load still validates the resulting address.
-  uint64_t MaxCount = std::numeric_limits<int64_t>::max() /
-                      (Element->getIntegerBitWidth() / 8);
+  uint64_t MaxCount =
+      std::numeric_limits<int64_t>::max() / (Element->getIntegerBitWidth() / 8);
   Value *Fits = B.CreateICmpULE(StableCount, B.getInt64(MaxCount));
   B.CreateCondBr(B.CreateAnd(Enough, Fits), Batch, Tail);
   Entry->getTerminator()->replaceUsesOfWith(&Loop, Guard);
@@ -133,28 +146,32 @@ void batchLoop(BasicBlock &Loop) {
   }
 
   B.SetCurrentDebugLocation(Read->getDebugLoc());
-  Value *Start = B.CreateGEP(Element, Address->getPointerOperand(), Map[Index]);
+  Value *BatchIndex = Map[Index];
+  Value *Start =
+      B.CreateGEP(Element, Address->getPointerOperand(), {BatchIndex});
   auto *Vector = FixedVectorType::get(Element, BatchWidth);
   // A normal Fil-C memory operation: lowering checks all vector bytes.
   auto *Wide = B.CreateAlignedLoad(Vector, Start, Align(1), "filcc.batch.read");
   SmallVector<Value *, 4> Updates(BatchPhis.size());
   for (unsigned Lane = 0; Lane != BatchWidth; ++Lane) {
     Map[Read] = B.CreateExtractElement(Wide, B.getInt32(Lane));
-    for (Instruction &I : Loop) {
+    for (Instruction &I : *Body) {
       if (isa<PHINode>(I) || &I == Address || &I == Read || &I == Test ||
           &I == Latch)
         continue;
       Instruction *Copy = I.clone();
       Copy->dropPoisonGeneratingAnnotations();
       Copy->insertInto(Batch, Batch->end());
-      RemapInstruction(Copy, Map, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+      RemapInstruction(Copy, Map,
+                       RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
       Map[&I] = Copy;
     }
     unsigned P = 0;
     for (PHINode &Phi : Loop.phis()) {
-      Value *Update = Phi.getIncomingValueForBlock(&Loop);
+      Value *Update = Phi.getIncomingValueForBlock(Body);
       auto It = Map.find(Update);
-      Updates[P++] = It != Map.end() ? static_cast<Value *>(It->second) : Update;
+      Updates[P++] =
+          It != Map.end() ? static_cast<Value *>(It->second) : Update;
     }
     P = 0;
     for (PHINode &Phi : Loop.phis())
@@ -162,7 +179,8 @@ void batchLoop(BasicBlock &Loop) {
   }
 
   Value *Remaining = B.CreateSub(StableCount, Map[Index]);
-  B.CreateCondBr(B.CreateICmpUGT(Remaining, B.getInt64(BatchWidth)), Batch, Tail);
+  B.CreateCondBr(B.CreateICmpUGT(Remaining, B.getInt64(BatchWidth)), Batch,
+                 Tail);
   B.SetInsertPoint(Tail);
   unsigned P = 0;
   for (PHINode &Phi : Loop.phis()) {

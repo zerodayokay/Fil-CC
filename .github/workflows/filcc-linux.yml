@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            benchmarkData
             clang
             cmake
             filcc
@@ -33,6 +34,22 @@ jobs:
         run: ninja -C build -j "$(nproc)" lib/Transforms/Instrumentation/CMakeFiles/LLVMInstrumentation.dir/FilCCBatchReads.cpp.o
       - name: Build clang
         run: ninja -C build -j "$(nproc)" clang
+      - name: Install the pinned stock toolchain
+        run: |
+          archive="$RUNNER_TEMP/filc-stock.tar.xz"
+          stock="$RUNNER_TEMP/filc-stock"
+          mkdir "$stock"
+          curl --fail --location --retry 3 -o "$archive" \
+            https://github.com/pizlonator/fil-c/releases/download/v0.687/filc-0.687-linux-x86_64.tar.xz
+          echo "aab538401f78a47ab261ee79afed8c6b99e1d4848e263ae159a75b03c1288da1  $archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$stock" --strip-components=1
+          (cd "$stock" && ./setup.sh)
+          cp build/bin/clang-20 "$stock/build/bin/filcc-clang"
+      - name: Run equivalence, safety and performance checks
+        run: |
+          stock="$RUNNER_TEMP/filc-stock"
+          python3 filcc/bench.py --stock "$stock/build/bin/clang" \
+            --filcc "$stock/build/bin/filcc-clang" --out filcc-results
       - name: Package build
         run: tar -C build/bin -cJf filcc-clang-linux-x86_64.tar.xz clang-20
       - uses: actions/upload-artifact@v4
@@ -40,3 +57,11 @@ jobs:
           name: filcc-clang-linux-x86_64
           path: filcc-clang-linux-x86_64.tar.xz
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: filcc-results
+          path: |
+            filcc-results/*.json
+            filcc-results/*.ll
+            filcc-results/*.log

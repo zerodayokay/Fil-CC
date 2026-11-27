@@ -4,7 +4,8 @@
 namespace llvm {
 class Function;
 
-// Strip-mine straight-line scalar read loops before Fil-C lowers memory accesses.
+// Strip-mine straight-line scalar read loops before Fil-C lowers memory
+// accesses.
 void filccBatchReads(Function &F);
 } // namespace llvm
 
