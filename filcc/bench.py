@@ -68,6 +68,8 @@ def main():
     parser.add_argument("--cflags", default="-O3 -march=native")
     parser.add_argument("--perf", action="store_true", help="also collect whole-process perf counters")
     args = parser.parse_args()
+    if args.perf and not shutil.which("perf"):
+        parser.error("--perf requires the Linux perf command")
     if args.samples < 3:
         parser.error("--samples must be at least 3")
     if not args.image.is_file():
@@ -107,7 +109,8 @@ def main():
 
     ir_on = (out / "lowering-filcc.log").read_text()
     ir_off = (out / "lowering-off.log").read_text()
-    if "filcc.batch.read" not in ir_on or "filcc.batch.read" in ir_off:
+    if ("filcc.batch.guard" not in ir_on or "load <4 x i32>" not in ir_on
+            or "filcc.batch.guard" in ir_off):
         raise RuntimeError("Expected checked vector batches only with -filcc-batch-reads")
 
     workloads = {
@@ -157,6 +160,12 @@ def main():
             "off_over_filcc_95ci": ratio_interval(samples["off"], samples["filcc"]),
             "samples": samples,
         }
+        if name.startswith("callback-aot-"):
+            generic = name.replace("-aot", "")
+            generic_samples = results["workloads"][generic]["samples"]
+            if any(samples[label][0]["checksum"] != generic_samples[label][0]["checksum"]
+                   for label in samples):
+                raise RuntimeError(f"Specialized callback checksum differs for {name}")
         results["workloads"][name] = record
         if args.perf:
             for label, exe in executables.items():

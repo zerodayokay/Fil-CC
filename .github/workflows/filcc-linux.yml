@@ -2,6 +2,13 @@ name: Fil-CC Linux
 on:
   push:
     branches: [codex/fil-cc]
+    paths:
+      - '.github/workflows/filcc-linux.yml'
+      - 'llvm/lib/Transforms/Instrumentation/**'
+      - 'filcc/*.c'
+      - 'filcc/*.h'
+      - 'filcc/*.py'
+      - 'filcc/*.sh'
   workflow_dispatch:
 
 permissions:
@@ -34,22 +41,6 @@ jobs:
         run: ninja -C build -j "$(nproc)" lib/Transforms/Instrumentation/CMakeFiles/LLVMInstrumentation.dir/FilCCBatchReads.cpp.o
       - name: Build clang
         run: ninja -C build -j "$(nproc)" clang
-      - name: Install the pinned stock toolchain
-        run: |
-          archive="$RUNNER_TEMP/filc-stock.tar.xz"
-          stock="$RUNNER_TEMP/filc-stock"
-          mkdir "$stock"
-          curl --fail --location --retry 3 -o "$archive" \
-            https://github.com/pizlonator/fil-c/releases/download/v0.687/filc-0.687-linux-x86_64.tar.xz
-          echo "aab538401f78a47ab261ee79afed8c6b99e1d4848e263ae159a75b03c1288da1  $archive" | sha256sum -c -
-          tar -xJf "$archive" -C "$stock" --strip-components=1
-          (cd "$stock" && ./setup.sh)
-          cp build/bin/clang-20 "$stock/build/bin/filcc-clang"
-      - name: Run equivalence, safety and performance checks
-        run: |
-          stock="$RUNNER_TEMP/filc-stock"
-          python3 filcc/bench.py --stock "$stock/build/bin/clang" \
-            --filcc "$stock/build/bin/filcc-clang" --out filcc-results
       - name: Package build
         run: tar -C build/bin -cJf filcc-clang-linux-x86_64.tar.xz clang-20
       - uses: actions/upload-artifact@v4
@@ -57,6 +48,15 @@ jobs:
           name: filcc-clang-linux-x86_64
           path: filcc-clang-linux-x86_64.tar.xz
           if-no-files-found: error
+      - name: Install the pinned stock toolchain
+        run: bash filcc/install.sh build/bin/clang-20 "$RUNNER_TEMP/filc-stock"
+      - name: Run equivalence, safety and performance checks
+        run: |
+          stock="$RUNNER_TEMP/filc-stock"
+          perf_args=()
+          command -v perf >/dev/null && perf_args+=(--perf)
+          python3 filcc/bench.py --stock "$stock/build/bin/clang" \
+            --filcc "$stock/build/bin/filcc-clang" --out filcc-results "${perf_args[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -65,3 +65,4 @@ jobs:
             filcc-results/*.json
             filcc-results/*.ll
             filcc-results/*.log
+            filcc-results/perf-*.csv
