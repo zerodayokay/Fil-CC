@@ -65,6 +65,41 @@ jobs:
           done
           "$stock" -O3 -pthread preflight/kernels.o preflight/regress.o -o preflight/regress
           timeout 60s preflight/regress
+      - name: Benchmark the same pass via IR replay
+        run: |
+          stock="$RUNNER_TEMP/stock/build/bin/clang"
+          awk 'NR == 1 {next} /^Here.s the pizlonated module/ {exit} {print}' \
+            preflight/trace-kernels.log >preflight/replay-kernels.ll
+          cat >preflight/filcc-replay <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          root=$(cd "$(dirname "$0")" && pwd)
+          replay="$root/replay-kernels.ll"
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" == -filcc-batch-reads ]]; then
+              unset 'args[-1]'
+              replay="$root/filc-kernels.ll"
+            else
+              args+=("$arg")
+            fi
+          done
+          for i in "${!args[@]}"; do
+            if [[ "${args[i]}" == */kernels.c ]]; then args[i]="$replay"; fi
+          done
+          exec "$STOCK_FILC" "${args[@]}"
+          EOF
+          chmod +x preflight/filcc-replay
+          export STOCK_FILC="$stock"
+          python3 filcc/bench.py --stock "$stock" --filcc "$PWD/preflight/filcc-replay" --out replay-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-benchmark-results
+          path: |
+            replay-results/*.json
+            replay-results/*.ll
+            replay-results/*.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
