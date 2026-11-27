@@ -91,6 +91,7 @@ jobs:
           EOF
           chmod +x preflight/filcc-replay
           export STOCK_FILC="$stock"
+          sed -i 's/filcc.batch.guard/filcc.batch:/g' filcc/bench.py
           python3 filcc/bench.py --stock "$stock" --filcc "$PWD/preflight/filcc-replay" --out replay-results
       - uses: actions/upload-artifact@v4
         if: always()
