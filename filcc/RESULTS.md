@@ -1,5 +1,29 @@
 # Fil-CC benchmark results
 
+## Integrated compiler
+
+The test built Clang from Fil-CC commit b5c7479f8f and installed it beside the official Fil-C 0.687 binary over the same pinned runtime. The Off and On columns use the same Fil-CC build. The separate Stock column uses the upstream release. [Linux build, test logs, and raw data](https://github.com/zerodayokay/Fil-CC/actions/runs/45926650575)
+
+The hosted runner used Intel(R) Xeon(R) 6975P-C and Linux-7.0.0-1014-aws-x86_64-with-glibc2.39. The benchmark pinned execution to logical CPU 0 and used 11 interleaved samples after one warm-up. Times are median nanoseconds per unit. The last two columns are paired median speedups. The Off / On column includes a 95% bootstrap interval.
+
+| Workload | Native Clang | Stock Fil-C | Off | On | Stock / On | Off / On |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Array scan, 16 KiB | 0.065 | 0.654 | 0.654 | 0.233 | 2.81× | 2.80× [2.80, 2.81] |
+| Array scan, 4 MiB | 0.134 | 0.662 | 0.662 | 0.244 | 2.71× | 2.71× [2.68, 2.74] |
+| Array scan, 128 MiB | 0.214 | 1.158 | 1.155 | 0.499 | 2.25× | 2.13× [1.93, 2.37] |
+| Generic callback, 100% dominant | 1.054 | 2.125 | 2.119 | 1.894 | 1.12× | 1.12× [1.11, 1.12] |
+| Generic callback, 90% dominant | 1.053 | 2.118 | 2.113 | 1.906 | 1.11× | 1.11× [1.10, 1.11] |
+| Explicit AOT callback, 100% dominant | 0.135 | 0.665 | 0.661 | 0.250 | 2.65× | 2.64× [2.60, 2.67] |
+| Explicit AOT callback, 90% dominant | 0.229 | 0.815 | 0.816 | 0.417 | 1.94× | 1.93× [1.91, 1.97] |
+| Shuffled pointer chase | 13.973 | 7.953 | 7.918 | 7.943 | 1.00× | 1.00× [0.99, 1.01] |
+| P6 image read and checksum | 0.454 | 0.938 | 0.930 | 0.641 | 1.47× | 1.46× [1.40, 1.56] |
+
+The 4 MiB scan took 63.1% less time per element with batching. The explicit AOT callback dispatch ran 7.56× faster than the generic call with the same compiler in the 100% case and 4.57× faster in the 90% case. The explicit dispatch uses the application's existing knowledge of the target. The compiler keeps the generic callback indirect.
+
+The runner restricted access to hardware performance counters. The raw artifact records the perf diagnostics.
+
+Both Fil-C drivers and both flag settings matched the valid checksums and rejected the null, short, and freed ranges. The packaged Fil-CC binary also passed the 16-bit recurrence, the 64-bit sum, and a C++20 program using the stock runtime. The collector completed 781 cycles while the optimized scans ran. This documents progress during scanning rather than a comparison of GC throughput. [Packaged binary validation](https://github.com/zerodayokay/Fil-CC/actions/runs/45931458064)
+
 ## LLVM IR replay
 
 This run compiled the fork's exact batching pass as a small standalone LLVM tool. It captured stock Fil-C's pre-lowering IR, applied the pass, verified the result with LLVM, then fed both the original and transformed IR back to the same stock Fil-C 0.687 compiler. Replay runs the early optimization pipeline a second time. It provides a test of the transformation and Fil-C lowering before measuring the normal integrated driver. [Replay workflow and raw measurements](https://github.com/zerodayokay/Fil-CC/actions/runs/45928127786)
